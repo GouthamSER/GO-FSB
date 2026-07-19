@@ -140,16 +140,31 @@ func (a *App) buildStreamLink(msgID int, name string, mediaID int64) string {
 }
 
 func (a *App) handleStart(ctx context.Context, e tg.Entities, u message.AnswerableMessageUpdate) error {
+	name := "there"
+	if a.botUser != nil {
+		name = "@" + a.botUser.Username
+	}
 	_, err := a.sender.Reply(e, u).Text(ctx,
-		"Hello! I'm File to link.\n\n"+
-			"Send me any file (document/video/audio/photo) and I'll generate a "+
-			"direct download / streaming link for it.")
+		"👋 Hey, welcome!\n\n"+
+			"I turn any file you send into a direct download/streaming link — "+
+			"documents, videos, audio, photos, all of it.\n\n"+
+			"📤 Just send me a file to get started.\n"+
+			"ℹ️ Send /help any time to know more about how "+name+" works.")
 	return err
 }
 
 func (a *App) handleHelp(ctx context.Context, e tg.Entities, u message.AnswerableMessageUpdate) error {
 	_, err := a.sender.Reply(e, u).Text(ctx,
-		"Send any file to get an instant download/streaming link.")
+		"ℹ️ How this works\n\n"+
+			"1️⃣ Send me any file (document, video, audio, or photo).\n"+
+			"2️⃣ I'll store it and reply with a link.\n"+
+			"3️⃣ That link streams directly — open it in a browser or paste it "+
+			"into a video player, no full download needed, and you can seek "+
+			"around freely.\n\n"+
+			"Commands:\n"+
+			"/start — quick intro\n"+
+			"/help — this message\n\n"+
+			"That's it — send a file whenever you're ready. 🚀")
 	return err
 }
 
@@ -200,7 +215,8 @@ func (a *App) handleMedia(ctx context.Context, e tg.Entities, u message.Answerab
 	}
 
 	text := fmt.Sprintf(
-		"✅ Your link is ready!\n\nFile name: %s\nFile size: %s\n\nLink: %s",
+		"✅ Your link is ready!\n\n📁 File name: %s\n📦 File size: %s\n\n🔗 Link: %s\n\n"+
+			"ℹ️ Know more: send /help",
 		name, sizeStr, link,
 	)
 	_, err = a.sender.Reply(e, u).Text(ctx, text)

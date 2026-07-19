@@ -43,6 +43,7 @@ This is a **"core only"** port — a deliberate scope cut, not an oversight.
 - **📡 No CDN redirect support** — `upload.fileCdnRedirect` responses aren't followed.
 - **🚦 Flood protection built in** — concurrent chunk requests are capped at 12 in-flight app-wide, with automatic retry+backoff on `FLOOD_WAIT` (video players fire lots of overlapping Range requests while seeking, which trips Telegram's rate limit fast without this).
 - **⚡ Pipelined downloads** — each stream prefetches up to 8 chunks ahead instead of waiting for one RPC round-trip before starting the next, so throughput isn't capped at 1 chunk/RTT anymore. Bytes are still written to the client strictly in order.
+- **⏱️ No artificial stream timeout** — only the initial metadata lookup gets a 30s timeout; the actual byte streaming uses the request's own context (cancels on client disconnect only). An earlier version accidentally reused that 30s timeout for the whole download, silently killing any file that took longer than 30s to finish and causing an endless client-retry/FLOOD_WAIT storm — fixed.
 - **✍️ Plain text replies only** — no HTML formatting or inline buttons, kept simple on purpose.
 
 ---

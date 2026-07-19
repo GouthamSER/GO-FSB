@@ -293,10 +293,15 @@ func (a *App) streamHandler(w http.ResponseWriter, r *http.Request) {
 	urlFileName, _ := url.QueryUnescape(m[2])
 	secureHash := r.URL.Query().Get("hash")
 
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-
-	fi, err := a.fetchFileInfo(ctx, msgID)
+	// Only the metadata lookup gets a short timeout. The actual byte
+	// streaming below uses r.Context() directly (cancels only if the
+	// client disconnects) — reusing the 30s metadata timeout here was a
+	// bug: any file that took longer than 30s to fully stream had its
+	// connection killed mid-transfer, and clients would just retry
+	// forever, causing exactly the FLOOD_WAIT storm this was meant to fix.
+	metaCtx, metaCancel := context.WithTimeout(r.Context(), 30*time.Second)
+	fi, err := a.fetchFileInfo(metaCtx, msgID)
+	metaCancel()
 	if err != nil {
 		http.Error(w, "404: file not found", http.StatusNotFound)
 		return
@@ -305,6 +310,7 @@ func (a *App) streamHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "403: invalid hash", http.StatusForbidden)
 		return
 	}
+	ctx := r.Context()
 
 	fileSize := fi.Size
 	var from, until int64
