@@ -20,6 +20,7 @@ type App struct {
 	binChannel *tg.InputChannel
 	botUser    *tg.User
 	resolved   chan struct{} // closed once binChannel is resolved
+	dlSem      chan struct{} // caps concurrent upload.getFile calls
 }
 
 func mediaOf(m *tg.Message) (name string, mime string, size int64, mediaID int64, ok bool) {

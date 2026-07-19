@@ -28,6 +28,7 @@ func main() {
 		api:      tg.NewClient(client),
 		cache:    newFileCache(),
 		resolved: make(chan struct{}),
+		dlSem:    make(chan struct{}, 6),
 	}
 	app.sender = message.NewSender(app.api)
 

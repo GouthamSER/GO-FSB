@@ -33,9 +33,10 @@ Ported: bot start/help, media→link generation, HTTP range streaming.
   session) was intentionally not ported for this pass.
 - **CDN redirect not handled** — `upload.fileCdnRedirect` responses error out
   instead of being followed.
-- Bot must already be a member/admin of BIN_CHANNEL *and* have exchanged at
-  least one message there before `resolveBinChannel` can find its access
-  hash (it walks `messages.getDialogs`).
+- Concurrent chunk requests are capped at 6 in-flight and retried with
+  backoff on `FLOOD_WAIT` — video players open several overlapping Range
+  requests while seeking/buffering, which tripped Telegram's rate limit
+  almost instantly before this cap was added.
 - No HTML formatting/inline buttons in replies — plain text only, kept
   simple on purpose.
 
