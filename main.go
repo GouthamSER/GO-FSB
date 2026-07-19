@@ -60,7 +60,7 @@ func main() {
 		log.Printf("bot started as @%s", self.Username)
 
 		rawID := rawChannelID(cfg.BinChannel)
-		binChannel, err := resolveBinChannel(ctx, app.api, rawID)
+		binChannel, err := resolveBinChannel(ctx, app.api, cfg.BinChannelInvite, rawID)
 		if err != nil {
 			return err
 		}
