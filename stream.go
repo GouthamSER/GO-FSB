@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 )
 
 const chunkSize = 1024 * 1024 // 1 MiB, same as python
@@ -114,20 +115,10 @@ func (a *App) downloadRange(ctx context.Context, loc tg.InputFileLocationClass, 
 	lastCut := until%chunkSize + 1
 
 	for cur := offset; cur <= until; cur += chunkSize {
-		r, err := a.api.UploadGetFile(ctx, &tg.UploadGetFileRequest{
-			Location: loc,
-			Offset:   cur,
-			Limit:    chunkSize,
-			Precise:  true,
-		})
+		chunk, err := a.getFileChunk(ctx, loc, cur)
 		if err != nil {
 			return fmt.Errorf("upload.getFile at offset %d: %w", cur, err)
 		}
-		f, ok := r.(*tg.UploadFile)
-		if !ok {
-			return fmt.Errorf("unexpected upload.getFile response %T (CDN redirect not supported)", r)
-		}
-		chunk := f.Bytes
 		if len(chunk) == 0 {
 			break
 		}
@@ -149,6 +140,39 @@ func (a *App) downloadRange(ctx context.Context, loc tg.InputFileLocationClass, 
 		}
 	}
 	return nil
+}
+
+// getFileChunk wraps upload.getFile with (a) a global concurrency cap, since
+// hammering Telegram with dozens of parallel chunk requests — which happens
+// fast when a video player opens several overlapping Range requests for
+// seeking/buffering — trips FLOOD_WAIT almost immediately, and (b)
+// transparent retry-with-backoff when FLOOD_WAIT does happen anyway.
+func (a *App) getFileChunk(ctx context.Context, loc tg.InputFileLocationClass, offset int64) ([]byte, error) {
+	a.dlSem <- struct{}{}
+	defer func() { <-a.dlSem }()
+
+	for attempt := 0; attempt < 5; attempt++ {
+		r, err := a.api.UploadGetFile(ctx, &tg.UploadGetFileRequest{
+			Location: loc,
+			Offset:   offset,
+			Limit:    chunkSize,
+			Precise:  true,
+		})
+		if err != nil {
+			if waited, werr := tgerr.FloodWait(ctx, err); waited {
+				continue
+			} else if werr != nil && werr != err {
+				return nil, werr
+			}
+			return nil, err
+		}
+		f, ok := r.(*tg.UploadFile)
+		if !ok {
+			return nil, fmt.Errorf("unexpected upload.getFile response %T (CDN redirect not supported)", r)
+		}
+		return f.Bytes, nil
+	}
+	return nil, fmt.Errorf("gave up after repeated FLOOD_WAIT at offset %d", offset)
 }
 
 var pathRe = regexp.MustCompile(`^(\d+)(?:/(.*))?$`)
