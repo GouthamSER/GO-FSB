@@ -41,7 +41,8 @@ This is a **"core only"** port — a deliberate scope cut, not an oversight.
 - **👤 Single bot client only** — no multi-token load balancing.
 - **🌍 Same-DC only** — `upload.getFile` is called against whatever DC the session is on; if the file lives on a different DC (`FILE_MIGRATE_X`), streaming fails. Cross-DC media sessions weren't ported.
 - **📡 No CDN redirect support** — `upload.fileCdnRedirect` responses aren't followed.
-- **🚦 Flood protection built in** — concurrent chunk requests are capped at 6 in-flight, with automatic retry+backoff on `FLOOD_WAIT` (video players fire lots of overlapping Range requests while seeking, which trips Telegram's rate limit fast without this).
+- **🚦 Flood protection built in** — concurrent chunk requests are capped at 12 in-flight app-wide, with automatic retry+backoff on `FLOOD_WAIT` (video players fire lots of overlapping Range requests while seeking, which trips Telegram's rate limit fast without this).
+- **⚡ Pipelined downloads** — each stream prefetches up to 8 chunks ahead instead of waiting for one RPC round-trip before starting the next, so throughput isn't capped at 1 chunk/RTT anymore. Bytes are still written to the client strictly in order.
 - **✍️ Plain text replies only** — no HTML formatting or inline buttons, kept simple on purpose.
 
 ---

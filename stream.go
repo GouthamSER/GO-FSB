@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gotd/td/tg"
@@ -122,37 +123,123 @@ var errFileNotFound = fmt.Errorf("file not found")
 // cross-DC media session juggling (what custom_dl.py's generate_media_session
 // does) was dropped for this "core only" port. Works fine when bot + bin
 // channel share a DC, which is the common case.
+// perStreamParallel is how many chunks a single HTTP stream tries to keep
+// in flight at once. The global a.dlSem cap is what actually protects
+// against FLOOD_WAIT, so this can safely be higher — it's just "how eager is
+// one request", not the real limiter.
+const perStreamParallel = 8
+
+// downloadRange used to fetch one 1 MiB chunk, wait for the full RPC
+// round-trip, write it, then fetch the next — completely serial, so total
+// throughput was capped at 1 chunk/RTT no matter how fast the pipe was.
+// This version prefetches up to perStreamParallel chunks concurrently and
+// writes them out strictly in order, so the RTT of chunk N+1 overlaps with
+// writing chunk N instead of stacking on top of it.
 func (a *App) downloadRange(ctx context.Context, loc tg.InputFileLocationClass, from, until int64, w http.ResponseWriter) error {
 	offset := from - (from % chunkSize)
 	firstCut := from - offset
 	lastCut := until%chunkSize + 1
+	total := int((until-offset)/chunkSize + 1)
 
-	for cur := offset; cur <= until; cur += chunkSize {
-		chunk, err := a.getFileChunk(ctx, loc, cur)
-		if err != nil {
-			return fmt.Errorf("upload.getFile at offset %d: %w", cur, err)
-		}
-		if len(chunk) == 0 {
-			break
-		}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-		start, end := int64(0), int64(len(chunk))
-		if cur == offset {
-			start = firstCut
-		}
-		if cur+chunkSize > until {
-			if lastCut < end {
-				end = lastCut
+	type job struct {
+		idx int
+		off int64
+	}
+	type res struct {
+		idx  int
+		data []byte
+		err  error
+	}
+
+	jobs := make(chan job)
+	results := make(chan res, perStreamParallel)
+
+	var wg sync.WaitGroup
+	workers := perStreamParallel
+	if total < workers {
+		workers = total
+	}
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				data, err := a.getFileChunk(ctx, loc, j.off)
+				select {
+				case results <- res{j.idx, data, err}:
+				case <-ctx.Done():
+					return
+				}
+				if err != nil {
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for i := 0; i < total; i++ {
+			select {
+			case jobs <- job{i, offset + int64(i)*chunkSize}:
+			case <-ctx.Done():
+				return
 			}
 		}
-		if start > end {
-			start = end
+	}()
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	pending := make(map[int][]byte, perStreamParallel)
+	next := 0
+	var firstErr error
+	stop := false
+	for r := range results {
+		if stop {
+			continue // drain so producer goroutines above don't leak on ctx.Done
 		}
-		if _, err := w.Write(chunk[start:end]); err != nil {
-			return err
+		if r.err != nil {
+			firstErr = fmt.Errorf("upload.getFile at offset %d: %w", offset+int64(r.idx)*chunkSize, r.err)
+			cancel()
+			stop = true
+			continue
+		}
+		pending[r.idx] = r.data
+		for {
+			data, ok := pending[next]
+			if !ok {
+				break
+			}
+			delete(pending, next)
+			if len(data) == 0 {
+				stop = true
+				cancel()
+				break
+			}
+			start, end := int64(0), int64(len(data))
+			if next == 0 {
+				start = firstCut
+			}
+			if next == total-1 && lastCut < end {
+				end = lastCut
+			}
+			if start > end {
+				start = end
+			}
+			if _, werr := w.Write(data[start:end]); werr != nil {
+				firstErr = werr
+				cancel()
+				stop = true
+				break
+			}
+			next++
 		}
 	}
-	return nil
+	return firstErr
 }
 
 // getFileChunk wraps upload.getFile with (a) a global concurrency cap, since
