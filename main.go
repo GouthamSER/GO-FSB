@@ -79,6 +79,19 @@ func main() {
 		app.botUser = self
 		log.Printf("bot started as @%s", self.Username)
 
+		// Fastest path: an explicit BIN_CHANNEL_ACCESS_HASH env var (log
+		// shows this value once resolved below — copy it in for platforms
+		// with ephemeral disks, e.g. Koyeb, so redeploys skip discovery).
+		if cfg.BinChannelAccessHash != 0 {
+			app.setBinChannel(rawID, cfg.BinChannelAccessHash)
+			log.Printf("BIN_CHANNEL resolved from BIN_CHANNEL_ACCESS_HASH env var")
+		} else if pc, ok := loadPeerCache(cfg.BinChannelCache); ok && pc.ChannelID == rawID {
+			// Next fastest: whatever we persisted last time we resolved it
+			// (survives process restarts as long as the disk isn't wiped).
+			app.setBinChannel(rawID, pc.AccessHash)
+			log.Printf("BIN_CHANNEL resolved from cache file %s", cfg.BinChannelCache)
+		}
+
 		// Start the HTTP server right away so health checks pass even
 		// before BIN_CHANNEL is resolved — /start and /help work
 		// immediately, only actual file forwarding waits on it.

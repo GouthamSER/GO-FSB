@@ -34,9 +34,22 @@ func (a *App) captureEntities(e tg.Entities, rawID int64) {
 	if !ok {
 		return
 	}
-	a.binChannel = &tg.InputChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}
-	a.binPeer = &tg.InputPeerChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}
-	log.Printf("resolved BIN_CHANNEL (id %d) from a live update", ch.ID)
+	a.setBinChannel(ch.ID, ch.AccessHash)
+	savePeerCache(a.cfg.BinChannelCache, peerCache{ChannelID: ch.ID, AccessHash: ch.AccessHash})
+	log.Printf(
+		"resolved BIN_CHANNEL (id %d) from a live update — set "+
+			"BIN_CHANNEL_ACCESS_HASH=%d as an env var to skip discovery on "+
+			"future deploys (useful on platforms with ephemeral disks)",
+		ch.ID, ch.AccessHash)
+}
+
+// setBinChannel is the single place that actually latches a resolved
+// channel in, whether it came from a live update, the on-disk cache, or the
+// BIN_CHANNEL_ACCESS_HASH env var override. Idempotent/safe to call more
+// than once.
+func (a *App) setBinChannel(channelID, accessHash int64) {
+	a.binChannel = &tg.InputChannel{ChannelID: channelID, AccessHash: accessHash}
+	a.binPeer = &tg.InputPeerChannel{ChannelID: channelID, AccessHash: accessHash}
 	select {
 	case <-a.resolved:
 	default:

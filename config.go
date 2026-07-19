@@ -11,18 +11,20 @@ import (
 // (no MULTI_TOKEN pool, no fsub, no mongo user-db, no admin/broadcast —
 // dropped per scope decision.)
 type Config struct {
-	APIID       int
-	APIHash     string
-	BotToken    string
-	BinChannel  int64 // as given, e.g. -1001234567890
-	Port        string
-	BindAddr    string
-	HashLength  int
-	FQDN        string
-	HasSSL      bool
-	NoPort      bool
-	URL         string
-	SessionFile string
+	APIID                int
+	APIHash              string
+	BotToken             string
+	BinChannel           int64 // as given, e.g. -1001234567890
+	BinChannelAccessHash int64 // optional: skip discovery entirely if set
+	Port                 string
+	BindAddr             string
+	HashLength           int
+	FQDN                 string
+	HasSSL               bool
+	NoPort               bool
+	URL                  string
+	SessionFile          string
+	BinChannelCache      string // where the resolved access_hash gets persisted across restarts
 }
 
 func mustEnv(key string) string {
@@ -81,19 +83,30 @@ func loadConfig() Config {
 	}
 	url += "/"
 
+	sessionFile := envDefault("SESSION_FILE", "gofilestream.session.json")
+	var accessHash int64
+	if v := os.Getenv("BIN_CHANNEL_ACCESS_HASH"); v != "" {
+		accessHash, err = strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "BIN_CHANNEL_ACCESS_HASH must be an int")
+			os.Exit(1)
+		}
+	}
 	return Config{
-		APIID:       apiID,
-		APIHash:     mustEnv("API_HASH"),
-		BotToken:    mustEnv("BOT_TOKEN"),
-		BinChannel:  binChannel,
-		Port:        port,
-		BindAddr:    bindAddr,
-		HashLength:  hashLen,
-		FQDN:        fqdn,
-		HasSSL:      hasSSL,
-		NoPort:      noPort,
-		URL:         url,
-		SessionFile: envDefault("SESSION_FILE", "gofilestream.session.json"),
+		APIID:                apiID,
+		APIHash:              mustEnv("API_HASH"),
+		BotToken:             mustEnv("BOT_TOKEN"),
+		BinChannel:           binChannel,
+		BinChannelAccessHash: accessHash,
+		Port:                 port,
+		BindAddr:             bindAddr,
+		HashLength:           hashLen,
+		FQDN:                 fqdn,
+		HasSSL:               hasSSL,
+		NoPort:               noPort,
+		URL:                  url,
+		SessionFile:          sessionFile,
+		BinChannelCache:      envDefault("BIN_CHANNEL_CACHE_FILE", sessionFile+".binchannel.json"),
 	}
 }
 

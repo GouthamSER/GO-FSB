@@ -1,57 +1,63 @@
-# gofilestream
+# 🚀 gofilestream
 
-Go port of TG-FileStreamBot core: `/start` `/help`, receive media → forward to
-BIN_CHANNEL → generate a range-request-capable streaming/download link.
-Built on `github.com/gotd/td`. **Compiles clean** — verified with `go build`
-+ `go vet` in a sandbox against gotd v0.110.0 (go1.22).
+> Go port of TG-FileStreamBot's core — send a file, get an instant streaming/download link.
 
-## Scope (per user decision — "core only")
+**👤 Owner:** [GouthamSER](https://github.com/GouthamSER)
 
-Ported: bot start/help, media→link generation, HTTP range streaming.
-**Dropped**: MULTI_TOKEN multi-client pool, FSUB, mongo user-db, /stats,
-/broadcast. Only single-bot-client, no persistence beyond the session file.
+Built on [`gotd/td`](https://github.com/gotd/td) (raw MTProto in Go, no CGo).
+✅ Verified with `go build` + `go vet` in a clean-room test against gotd v0.110.0 (go1.22).
 
-## Known limitations
+---
 
-- **Bots can't call `messages.getDialogs` or `messages.checkChatInvite`**
-  (`BOT_METHOD_INVALID` on both — pure user-account concepts). So
-  BIN_CHANNEL's access hash is bootstrapped **passively**: the moment the
-  bot's connection receives *any* live update mentioning that channel (it
-  being promoted to admin, a message posted there, etc.), that update comes
-  with a resolved `tg.Entities` bundle containing the channel's access hash,
-  and we latch it in. Practically: **after first deploy, open BIN_CHANNEL
-  and remove+re-add the bot as admin** (or just post any message there) —
-  that one event is what teaches the bot the channel's access hash. It's a
-  one-time thing per fresh deploy/session file; after that it's cached in
-  the running process. `/start` and `/help` work immediately either way —
-  only actual file-link generation waits on this.
-- **Single client only** — no load-balancing across multiple bot tokens.
-- **Same-DC only** — file download uses `upload.getFile` directly against
-  whatever DC the client session is on. If BIN_CHANNEL's media lives on a
-  different DC (`FILE_MIGRATE_X`), streaming will fail. custom_dl.py's
-  cross-DC `generate_media_session` (exported-auth import into a second DC
-  session) was intentionally not ported for this pass.
-- **CDN redirect not handled** — `upload.fileCdnRedirect` responses error out
-  instead of being followed.
-- Concurrent chunk requests are capped at 6 in-flight and retried with
-  backoff on `FLOOD_WAIT` — video players open several overlapping Range
-  requests while seeking/buffering, which tripped Telegram's rate limit
-  almost instantly before this cap was added.
-- No HTML formatting/inline buttons in replies — plain text only, kept
-  simple on purpose.
+## ✨ What it does
 
-## Build
+- 🤖 `/start` and `/help` bot commands
+- 📤 Send any document / video / audio / photo → bot forwards it to your storage channel and replies with a link
+- 🎬 That link supports HTTP Range requests, so it streams/seeks straight in a browser or video player — no full download needed
 
-```
+## 🧩 Scope
+
+This is a **"core only"** port — a deliberate scope cut, not an oversight.
+
+| Ported ✅ | Dropped ❌ |
+|---|---|
+| bot `/start` `/help` | MULTI_TOKEN multi-client pool |
+| media → link generation | FSUB gate |
+| HTTP range streaming | MongoDB user-db |
+| | `/stats`, `/broadcast` |
+
+---
+
+## ⚠️ Known limitations
+
+- **🔑 Bin-channel discovery is passive.** Bots can't call `messages.getDialogs`
+  or `messages.checkChatInvite` (`BOT_METHOD_INVALID` on both). Instead, the
+  bot learns `BIN_CHANNEL`'s access hash the moment a live update mentions
+  it. **First run:** open the channel and remove+re-add the bot as admin (or
+  post any message there) to trigger it.
+  - 💾 Once learned, it's cached to disk next to the session file — same-disk restarts skip discovery.
+  - ☁️ On ephemeral-disk platforms (Koyeb etc.) that cache doesn't survive a redeploy — instead, copy the `BIN_CHANNEL_ACCESS_HASH=...` value the logs print after first resolution into an env var, and every future deploy resolves instantly.
+  - `/start` and `/help` work immediately either way — only file-link generation waits on this.
+- **👤 Single bot client only** — no multi-token load balancing.
+- **🌍 Same-DC only** — `upload.getFile` is called against whatever DC the session is on; if the file lives on a different DC (`FILE_MIGRATE_X`), streaming fails. Cross-DC media sessions weren't ported.
+- **📡 No CDN redirect support** — `upload.fileCdnRedirect` responses aren't followed.
+- **🚦 Flood protection built in** — concurrent chunk requests are capped at 6 in-flight, with automatic retry+backoff on `FLOOD_WAIT` (video players fire lots of overlapping Range requests while seeking, which trips Telegram's rate limit fast without this).
+- **✍️ Plain text replies only** — no HTML formatting or inline buttons, kept simple on purpose.
+
+---
+
+## 🛠️ Build
+
+```bash
 go mod tidy   # needs real internet — pulls gotd/td + deps from the module proxy
 go build .
 ```
 
-## Run
+## ▶️ Run
 
-Set env vars (subset of the python bot's `.env`):
+Set env vars (subset of the Python bot's `.env`):
 
-```
+```env
 API_ID=...
 API_HASH=...
 BOT_TOKEN=...
@@ -63,12 +69,25 @@ FQDN=your.domain.com
 HAS_SSL=true
 NO_PORT=true
 SESSION_FILE=gofilestream.session.json
+# BIN_CHANNEL_ACCESS_HASH=...   # optional — skips discovery, see Known limitations
 ```
 
-```
+```bash
 ./gofilestream
 ```
 
-First run: once it's up, open BIN_CHANNEL in Telegram and remove+re-add the
-bot as admin (or send any message there) — that's what lets the bot learn
-the channel's access hash. See Known limitations for why.
+**🔗 First run:** once it's up, open `BIN_CHANNEL` in Telegram and remove+re-add
+the bot as admin (or send any message there) — that's what lets it learn the
+channel's access hash. See ⚠️ Known limitations for the full story.
+
+---
+
+## 🐳 Deploy
+
+`Dockerfile` and `Procfile` included — ready for Koyeb, Render, Railway, or
+any Docker-based host. Multi-stage build → static binary on Alpine, with a
+health check baked in.
+
+---
+
+<p align="center">Made for <a href="https://github.com/GouthamSER">@GouthamSER</a> 🐐</p>
