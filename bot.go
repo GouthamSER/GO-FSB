@@ -19,6 +19,7 @@ type App struct {
 	binPeer    tg.InputPeerClass
 	binChannel *tg.InputChannel
 	botUser    *tg.User
+	resolved   chan struct{} // closed once binChannel is resolved
 }
 
 func mediaOf(m *tg.Message) (name string, mime string, size int64, mediaID int64, ok bool) {
@@ -152,6 +153,11 @@ func (a *App) handleHelp(ctx context.Context, e tg.Entities, u message.Answerabl
 }
 
 func (a *App) handleMedia(ctx context.Context, e tg.Entities, u message.AnswerableMessageUpdate, m *tg.Message) error {
+	if !a.isResolved() {
+		_, err := a.sender.Reply(e, u).Text(ctx,
+			"⏳ Still linking to storage channel, try again in a few seconds.")
+		return err
+	}
 	name, mime, size, mediaID, ok := mediaOf(m)
 	if !ok {
 		return nil

@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
@@ -14,6 +15,7 @@ import (
 
 func main() {
 	cfg := loadConfig()
+	rawID := rawChannelID(cfg.BinChannel)
 
 	dispatcher := tg.NewUpdateDispatcher()
 	client := telegram.NewClient(cfg.APIID, cfg.APIHash, telegram.Options{
@@ -22,13 +24,15 @@ func main() {
 	})
 
 	app := &App{
-		cfg:   cfg,
-		api:   tg.NewClient(client),
-		cache: newFileCache(),
+		cfg:      cfg,
+		api:      tg.NewClient(client),
+		cache:    newFileCache(),
+		resolved: make(chan struct{}),
 	}
 	app.sender = message.NewSender(app.api)
 
 	dispatcher.OnNewMessage(func(ctx context.Context, e tg.Entities, u *tg.UpdateNewMessage) error {
+		app.captureEntities(e, rawID)
 		m, ok := u.Message.(*tg.Message)
 		if !ok || m.Out {
 			return nil
@@ -42,6 +46,21 @@ func main() {
 		if m.Media != nil {
 			return app.handleMedia(ctx, e, u, m)
 		}
+		return nil
+	})
+	// Every one of these just latches BIN_CHANNEL's access hash the moment
+	// it shows up in Entities — see captureEntities in stream.go for why
+	// this passive approach is needed instead of an RPC lookup.
+	dispatcher.OnNewChannelMessage(func(ctx context.Context, e tg.Entities, u *tg.UpdateNewChannelMessage) error {
+		app.captureEntities(e, rawID)
+		return nil
+	})
+	dispatcher.OnChannelParticipant(func(ctx context.Context, e tg.Entities, u *tg.UpdateChannelParticipant) error {
+		app.captureEntities(e, rawID)
+		return nil
+	})
+	dispatcher.OnChannel(func(ctx context.Context, e tg.Entities, u *tg.UpdateChannel) error {
+		app.captureEntities(e, rawID)
 		return nil
 	})
 
@@ -59,22 +78,31 @@ func main() {
 		app.botUser = self
 		log.Printf("bot started as @%s", self.Username)
 
-		rawID := rawChannelID(cfg.BinChannel)
-		binChannel, err := resolveBinChannel(ctx, app.api, cfg.BinChannelInvite, rawID)
-		if err != nil {
-			return err
-		}
-		app.binChannel = binChannel
-		app.binPeer = &tg.InputPeerChannel{ChannelID: binChannel.ChannelID, AccessHash: binChannel.AccessHash}
-		log.Printf("resolved BIN_CHANNEL (raw id %d)", rawID)
-
+		// Start the HTTP server right away so health checks pass even
+		// before BIN_CHANNEL is resolved — /start and /help work
+		// immediately, only actual file forwarding waits on it.
 		go func() {
 			if err := app.runServer(); err != nil {
 				log.Fatalf("http server: %v", err)
 			}
 		}()
-
 		log.Printf("URL => %s", cfg.URL)
+
+		go func() {
+			select {
+			case <-app.resolved:
+				return
+			case <-time.After(10 * time.Second):
+			}
+			log.Printf(
+				"BIN_CHANNEL (id %d) not resolved yet — the bot needs a live "+
+					"update mentioning it. Open the channel and re-add/promote "+
+					"this bot as admin (or post any message there) to trigger it.",
+				rawID)
+			<-app.resolved
+			log.Printf("BIN_CHANNEL resolved, file links will work now")
+		}()
+
 		<-ctx.Done()
 		return ctx.Err()
 	})

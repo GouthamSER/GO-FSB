@@ -11,19 +11,18 @@ import (
 // (no MULTI_TOKEN pool, no fsub, no mongo user-db, no admin/broadcast —
 // dropped per scope decision.)
 type Config struct {
-	APIID            int
-	APIHash          string
-	BotToken         string
-	BinChannel       int64  // as given, e.g. -1001234567890
-	BinChannelInvite string // t.me/+xxx or t.me/joinchat/xxx invite link for BIN_CHANNEL
-	Port             string
-	BindAddr         string
-	HashLength       int
-	FQDN             string
-	HasSSL           bool
-	NoPort           bool
-	URL              string
-	SessionFile      string
+	APIID       int
+	APIHash     string
+	BotToken    string
+	BinChannel  int64 // as given, e.g. -1001234567890
+	Port        string
+	BindAddr    string
+	HashLength  int
+	FQDN        string
+	HasSSL      bool
+	NoPort      bool
+	URL         string
+	SessionFile string
 }
 
 func mustEnv(key string) string {
@@ -83,19 +82,18 @@ func loadConfig() Config {
 	url += "/"
 
 	return Config{
-		APIID:            apiID,
-		APIHash:          mustEnv("API_HASH"),
-		BotToken:         mustEnv("BOT_TOKEN"),
-		BinChannel:       binChannel,
-		BinChannelInvite: mustEnv("BIN_CHANNEL_INVITE"),
-		Port:             port,
-		BindAddr:         bindAddr,
-		HashLength:       hashLen,
-		FQDN:             fqdn,
-		HasSSL:           hasSSL,
-		NoPort:           noPort,
-		URL:              url,
-		SessionFile:      envDefault("SESSION_FILE", "gofilestream.session.json"),
+		APIID:       apiID,
+		APIHash:     mustEnv("API_HASH"),
+		BotToken:    mustEnv("BOT_TOKEN"),
+		BinChannel:  binChannel,
+		Port:        port,
+		BindAddr:    bindAddr,
+		HashLength:  hashLen,
+		FQDN:        fqdn,
+		HasSSL:      hasSSL,
+		NoPort:      noPort,
+		URL:         url,
+		SessionFile: envDefault("SESSION_FILE", "gofilestream.session.json"),
 	}
 }
 

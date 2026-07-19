@@ -17,57 +17,34 @@ import (
 
 const chunkSize = 1024 * 1024 // 1 MiB, same as python
 
-// resolveBinChannel finds BIN_CHANNEL's access hash via messages.checkChatInvite
-// on its invite link. Bots can't call messages.getDialogs (BOT_METHOD_INVALID —
-// "dialogs" is a user-account concept), so the invite-link check is the
-// actual working bootstrap: the bot must already be a member (added via that
-// same invite link, or promoted directly), and checkChatInvite returns the
-// full Channel object — including access_hash — either way.
-func resolveBinChannel(ctx context.Context, api *tg.Client, invite string, rawID int64) (*tg.InputChannel, error) {
-	hash := extractInviteHash(invite)
-	if hash == "" {
-		return nil, fmt.Errorf("could not parse invite hash out of BIN_CHANNEL_INVITE %q", invite)
+// Bots can't call messages.getDialogs OR messages.checkChatInvite
+// (both are BOT_METHOD_INVALID — pure user-account concepts). The only
+// thing that actually works for a bot account is passive: every update the
+// bot receives comes with a resolved tg.Entities bundle, and the moment the
+// bot is added/promoted as admin in BIN_CHANNEL (or sees any message posted
+// there), that update's Entities.Channels[id] carries the full Channel
+// object including AccessHash. captureEntities watches for that on every
+// single update and latches it in once, see main.go wiring.
+func (a *App) captureEntities(e tg.Entities, rawID int64) {
+	if a.binChannel != nil {
+		return
 	}
-
-	res, err := api.MessagesCheckChatInvite(ctx, hash)
-	if err != nil {
-		return nil, fmt.Errorf("checkChatInvite: %w", err)
-	}
-
-	var chat tg.ChatClass
-	switch v := res.(type) {
-	case *tg.ChatInviteAlready:
-		chat = v.Chat
-	case *tg.ChatInvitePeek:
-		chat = v.Chat
-	default:
-		return nil, fmt.Errorf(
-			"bot is not a member of BIN_CHANNEL yet (got %T back) — add/promote the "+
-				"bot in the channel via this exact invite link first", res)
-	}
-
-	ch, ok := chat.(*tg.Channel)
+	ch, ok := e.Channels[rawID]
 	if !ok {
-		return nil, fmt.Errorf("BIN_CHANNEL_INVITE does not point at a channel (got %T)", chat)
+		return
 	}
-	if ch.ID != rawID {
-		return nil, fmt.Errorf(
-			"BIN_CHANNEL_INVITE resolves to channel id %d, but BIN_CHANNEL env is %d — "+
-				"double check they point at the same channel", ch.ID, rawID)
+	a.binChannel = &tg.InputChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}
+	a.binPeer = &tg.InputPeerChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}
+	log.Printf("resolved BIN_CHANNEL (id %d) from a live update", ch.ID)
+	select {
+	case <-a.resolved:
+	default:
+		close(a.resolved)
 	}
-	return &tg.InputChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}, nil
 }
 
-// extractInviteHash pulls the hash out of a t.me invite link. Accepts
-// https://t.me/+HASH, t.me/+HASH, https://t.me/joinchat/HASH, or a bare hash.
-func extractInviteHash(link string) string {
-	s := strings.TrimSpace(link)
-	s = strings.TrimPrefix(s, "https://")
-	s = strings.TrimPrefix(s, "http://")
-	s = strings.TrimPrefix(s, "t.me/")
-	s = strings.TrimPrefix(s, "+")
-	s = strings.TrimPrefix(s, "joinchat/")
-	return s
+func (a *App) isResolved() bool {
+	return a.binChannel != nil
 }
 
 // fetchFileInfo refreshes/loads a bin-channel message's file location via

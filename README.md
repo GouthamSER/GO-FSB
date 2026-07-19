@@ -13,11 +13,18 @@ Ported: bot start/help, media→link generation, HTTP range streaming.
 
 ## Known limitations
 
-- **Bots can't call `messages.getDialogs`** (`BOT_METHOD_INVALID`) — that's a
-  user-account-only concept. So BIN_CHANNEL's access hash is bootstrapped via
-  `messages.checkChatInvite` on an invite link instead — you must set
-  `BIN_CHANNEL_INVITE` to that channel's invite link, and the bot must
-  already be a member of it (added via that link, or promoted directly).
+- **Bots can't call `messages.getDialogs` or `messages.checkChatInvite`**
+  (`BOT_METHOD_INVALID` on both — pure user-account concepts). So
+  BIN_CHANNEL's access hash is bootstrapped **passively**: the moment the
+  bot's connection receives *any* live update mentioning that channel (it
+  being promoted to admin, a message posted there, etc.), that update comes
+  with a resolved `tg.Entities` bundle containing the channel's access hash,
+  and we latch it in. Practically: **after first deploy, open BIN_CHANNEL
+  and remove+re-add the bot as admin** (or just post any message there) —
+  that one event is what teaches the bot the channel's access hash. It's a
+  one-time thing per fresh deploy/session file; after that it's cached in
+  the running process. `/start` and `/help` work immediately either way —
+  only actual file-link generation waits on this.
 - **Single client only** — no load-balancing across multiple bot tokens.
 - **Same-DC only** — file download uses `upload.getFile` directly against
   whatever DC the client session is on. If BIN_CHANNEL's media lives on a
@@ -48,7 +55,6 @@ API_ID=...
 API_HASH=...
 BOT_TOKEN=...
 BIN_CHANNEL=-1001234567890
-BIN_CHANNEL_INVITE=https://t.me/+xxxxxxxxxxxxx
 PORT=8080
 WEB_SERVER_BIND_ADDRESS=0.0.0.0
 HASH_LENGTH=6
@@ -62,6 +68,6 @@ SESSION_FILE=gofilestream.session.json
 ./gofilestream
 ```
 
-First run: bot must already be a member of BIN_CHANNEL via `BIN_CHANNEL_INVITE`'s
-link (add it as admin using that same invite link) — dialog-list bootstrapping
-doesn't work for bot accounts, see Known limitations.
+First run: once it's up, open BIN_CHANNEL in Telegram and remove+re-add the
+bot as admin (or send any message there) — that's what lets the bot learn
+the channel's access hash. See Known limitations for why.
