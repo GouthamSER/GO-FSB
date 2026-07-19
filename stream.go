@@ -17,61 +17,57 @@ import (
 
 const chunkSize = 1024 * 1024 // 1 MiB, same as python
 
-// resolveBinChannel finds BIN_CHANNEL's access hash by walking the bot's
-// dialog list (messages.getDialogs). The bot must already be a member/admin
-// of the channel. This is the Go equivalent of what pyrogram's local peer
-// cache gives you for free.
-func resolveBinChannel(ctx context.Context, api *tg.Client, rawID int64) (*tg.InputChannel, error) {
-	offsetPeer := tg.InputPeerClass(&tg.InputPeerEmpty{})
-	offsetID, offsetDate := 0, 0
-
-	for i := 0; i < 20; i++ { // hard cap of ~20 pages so a huge account can't loop forever
-		res, err := api.MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
-			OffsetDate: offsetDate,
-			OffsetID:   offsetID,
-			OffsetPeer: offsetPeer,
-			Limit:      100,
-			Hash:       0,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("getDialogs: %w", err)
-		}
-
-		var chats []tg.ChatClass
-		var dialogs []tg.DialogClass
-		done := false
-		switch d := res.(type) {
-		case *tg.MessagesDialogs:
-			chats, dialogs = d.Chats, d.Dialogs
-			done = true
-		case *tg.MessagesDialogsSlice:
-			chats, dialogs = d.Chats, d.Dialogs
-		default:
-			return nil, fmt.Errorf("unexpected dialogs response %T", res)
-		}
-
-		for _, c := range chats {
-			if ch, ok := c.(*tg.Channel); ok && ch.ID == rawID {
-				return &tg.InputChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}, nil
-			}
-		}
-
-		if done || len(dialogs) == 0 {
-			break
-		}
-		last := dialogs[len(dialogs)-1]
-		if d, ok := last.(*tg.Dialog); ok {
-			offsetID = d.TopMessage
-		}
-		// crude but fine for our purposes: stop once a page comes back short
-		if len(dialogs) < 100 {
-			break
-		}
+// resolveBinChannel finds BIN_CHANNEL's access hash via messages.checkChatInvite
+// on its invite link. Bots can't call messages.getDialogs (BOT_METHOD_INVALID —
+// "dialogs" is a user-account concept), so the invite-link check is the
+// actual working bootstrap: the bot must already be a member (added via that
+// same invite link, or promoted directly), and checkChatInvite returns the
+// full Channel object — including access_hash — either way.
+func resolveBinChannel(ctx context.Context, api *tg.Client, invite string, rawID int64) (*tg.InputChannel, error) {
+	hash := extractInviteHash(invite)
+	if hash == "" {
+		return nil, fmt.Errorf("could not parse invite hash out of BIN_CHANNEL_INVITE %q", invite)
 	}
-	return nil, fmt.Errorf(
-		"BIN_CHANNEL %d not found in bot's dialog list — make sure the bot "+
-			"is an admin/member of it and has sent/received at least one message there",
-		rawID)
+
+	res, err := api.MessagesCheckChatInvite(ctx, hash)
+	if err != nil {
+		return nil, fmt.Errorf("checkChatInvite: %w", err)
+	}
+
+	var chat tg.ChatClass
+	switch v := res.(type) {
+	case *tg.ChatInviteAlready:
+		chat = v.Chat
+	case *tg.ChatInvitePeek:
+		chat = v.Chat
+	default:
+		return nil, fmt.Errorf(
+			"bot is not a member of BIN_CHANNEL yet (got %T back) — add/promote the "+
+				"bot in the channel via this exact invite link first", res)
+	}
+
+	ch, ok := chat.(*tg.Channel)
+	if !ok {
+		return nil, fmt.Errorf("BIN_CHANNEL_INVITE does not point at a channel (got %T)", chat)
+	}
+	if ch.ID != rawID {
+		return nil, fmt.Errorf(
+			"BIN_CHANNEL_INVITE resolves to channel id %d, but BIN_CHANNEL env is %d — "+
+				"double check they point at the same channel", ch.ID, rawID)
+	}
+	return &tg.InputChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}, nil
+}
+
+// extractInviteHash pulls the hash out of a t.me invite link. Accepts
+// https://t.me/+HASH, t.me/+HASH, https://t.me/joinchat/HASH, or a bare hash.
+func extractInviteHash(link string) string {
+	s := strings.TrimSpace(link)
+	s = strings.TrimPrefix(s, "https://")
+	s = strings.TrimPrefix(s, "http://")
+	s = strings.TrimPrefix(s, "t.me/")
+	s = strings.TrimPrefix(s, "+")
+	s = strings.TrimPrefix(s, "joinchat/")
+	return s
 }
 
 // fetchFileInfo refreshes/loads a bin-channel message's file location via
