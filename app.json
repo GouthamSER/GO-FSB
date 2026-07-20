@@ -1,0 +1,57 @@
+{
+  "name": "gofilestream",
+  "description": "Go port of TG-FileStreamBot core — file to streaming/download link, Telegram bot.",
+  "repository": "https://github.com/GouthamSER/GO-FSB",
+  "keywords": ["go", "telegram", "bot", "file-streaming"],
+  "stack": "container",
+  "env": {
+    "API_ID": {
+      "description": "Telegram API ID from my.telegram.org",
+      "required": true
+    },
+    "API_HASH": {
+      "description": "Telegram API hash from my.telegram.org",
+      "required": true
+    },
+    "BOT_TOKEN": {
+      "description": "Bot token from @BotFather",
+      "required": true
+    },
+    "BIN_CHANNEL": {
+      "description": "Storage channel id, e.g. -1001234567890",
+      "required": true
+    },
+    "BIN_CHANNEL_ACCESS_HASH": {
+      "description": "Optional — skips first-run channel discovery. Leave blank on first deploy, then copy the value the logs print once resolved and set it here for future deploys.",
+      "required": false
+    },
+    "HASH_LENGTH": {
+      "description": "Length of the hash suffix on generated links",
+      "value": "6",
+      "required": false
+    },
+    "FQDN": {
+      "description": "Public domain Heroku gives this app, e.g. your-app-name.herokuapp.com",
+      "required": true
+    },
+    "HAS_SSL": {
+      "description": "Heroku always terminates SSL for you — leave true",
+      "value": "true",
+      "required": false
+    },
+    "NO_PORT": {
+      "description": "Heroku's router doesn't need the port in the URL — leave true",
+      "value": "true",
+      "required": false
+    },
+    "CHANNEL_URL": {
+      "description": "Optional — shows a channel button on /start",
+      "required": false
+    },
+    "SESSION_FILE": {
+      "description": "Optional — where the Telegram session is stored",
+      "value": "gofilestream.session.json",
+      "required": false
+    }
+  }
+}
