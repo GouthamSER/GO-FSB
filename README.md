@@ -11,9 +11,12 @@ Built on [`gotd/td`](https://github.com/gotd/td) (raw MTProto in Go, no CGo).
 
 ## ✨ What it does
 
-- 🤖 `/start` and `/help` bot commands
-- 📤 Send any document / video / audio / photo → bot forwards it to your storage channel and replies with a link
+- 🤖 `/start`, `/help`, `/stats` bot commands
+- 📤 Send any document / video / audio / photo → bot forwards it to your storage channel and replies with a link + a tappable ⬇️ Download button
 - 🎬 That link supports HTTP Range requests, so it streams/seeks straight in a browser or video player — no full download needed
+- 📥 Every upload also posts a note in `BIN_CHANNEL` — sender name, username, user ID, file name — so admins can see who sent what
+- 📊 `/stats` reports live CPU / RAM / storage / uptime (reads `/proc` + `statfs` directly, Linux only — fine for the Docker deploy, won't build on macOS/Windows)
+- 📢 Optional channel button on `/start` if `CHANNEL_URL` is set
 
 ## 🧩 Scope
 
@@ -72,6 +75,7 @@ HAS_SSL=true
 NO_PORT=true
 SESSION_FILE=gofilestream.session.json
 # BIN_CHANNEL_ACCESS_HASH=...   # optional — skips discovery, see Known limitations
+# CHANNEL_URL=https://t.me/yourchannel   # optional — shows a button on /start
 ```
 
 ```bash

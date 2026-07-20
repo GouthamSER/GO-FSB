@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"time"
 
 	"github.com/gotd/td/telegram/message"
+	"github.com/gotd/td/telegram/message/markup"
 	"github.com/gotd/td/tg"
 )
 
@@ -21,6 +23,7 @@ type App struct {
 	botUser    *tg.User
 	resolved   chan struct{} // closed once binChannel is resolved
 	dlSem      chan struct{} // caps concurrent upload.getFile calls
+	startedAt  time.Time
 }
 
 func mediaOf(m *tg.Message) (name string, mime string, size int64, mediaID int64, ok bool) {
@@ -117,6 +120,15 @@ func fromPeerOf(e tg.Entities, m *tg.Message) (tg.InputPeerClass, bool) {
 	return nil, false
 }
 
+func senderUserOf(e tg.Entities, m *tg.Message) (*tg.User, bool) {
+	if pu, ok := m.PeerID.(*tg.PeerUser); ok {
+		if u, ok := e.Users[pu.UserID]; ok {
+			return u, true
+		}
+	}
+	return nil, false
+}
+
 // extractForwardedID pulls the new message id out of the Updates returned by
 // ForwardIDs().Send(), i.e. the id it got inside BIN_CHANNEL.
 func extractForwardedID(upd tg.UpdatesClass) (int, bool) {
@@ -140,16 +152,18 @@ func (a *App) buildStreamLink(msgID int, name string, mediaID int64) string {
 }
 
 func (a *App) handleStart(ctx context.Context, e tg.Entities, u message.AnswerableMessageUpdate) error {
-	name := "there"
-	if a.botUser != nil {
-		name = "@" + a.botUser.Username
+	text := "👋 Hey, welcome!\n\n" +
+		"I'm F2L bot ⚡ powered by Go — send me any file (document, video, " +
+		"audio, photo) and I'll hand you back a direct download/streaming " +
+		"link for it, fast.\n\n" +
+		"📤 Just send a file to get started.\n" +
+		"ℹ️ Send /help any time to know more about how I work."
+
+	b := a.sender.Reply(e, u)
+	if a.cfg.ChannelURL != "" {
+		b = b.Markup(markup.InlineRow(markup.URL("📢 Our Channel", a.cfg.ChannelURL)))
 	}
-	_, err := a.sender.Reply(e, u).Text(ctx,
-		"👋 Hey, welcome!\n\n"+
-			"I turn any file you send into a direct download/streaming link — "+
-			"documents, videos, audio, photos, all of it.\n\n"+
-			"📤 Just send me a file to get started.\n"+
-			"ℹ️ Send /help any time to know more about how "+name+" works.")
+	_, err := b.Text(ctx, text)
 	return err
 }
 
@@ -163,8 +177,14 @@ func (a *App) handleHelp(ctx context.Context, e tg.Entities, u message.Answerabl
 			"around freely.\n\n"+
 			"Commands:\n"+
 			"/start — quick intro\n"+
-			"/help — this message\n\n"+
+			"/help — this message\n"+
+			"/stats — server status\n\n"+
 			"That's it — send a file whenever you're ready. 🚀")
+	return err
+}
+
+func (a *App) handleStats(ctx context.Context, e tg.Entities, u message.AnswerableMessageUpdate) error {
+	_, err := a.sender.Reply(e, u).Text(ctx, a.statsText())
 	return err
 }
 
@@ -208,6 +228,25 @@ func (a *App) handleMedia(ctx context.Context, e tg.Entities, u message.Answerab
 		})
 	}
 
+	// Let admins watching BIN_CHANNEL see who sent what.
+	if sender, ok := senderUserOf(e, m); ok {
+		who := sender.FirstName
+		if who == "" {
+			who = "(no name)"
+		}
+		uname := "no username"
+		if sender.Username != "" {
+			uname = "@" + sender.Username
+		}
+		note := fmt.Sprintf(
+			"📥 New file from %s\n👤 %s\n🆔 User ID: %d\n📁 File: %s",
+			who, uname, sender.ID, name,
+		)
+		if _, err := a.sender.To(a.binPeer).Text(ctx, note); err != nil {
+			log.Printf("bin channel notify failed: %v", err)
+		}
+	}
+
 	link := a.buildStreamLink(binMsgID, name, mediaID)
 	sizeStr := "Unknown"
 	if size > 0 {
@@ -219,6 +258,8 @@ func (a *App) handleMedia(ctx context.Context, e tg.Entities, u message.Answerab
 			"ℹ️ Know more: send /help",
 		name, sizeStr, link,
 	)
-	_, err = a.sender.Reply(e, u).Text(ctx, text)
+	_, err = a.sender.Reply(e, u).
+		Markup(markup.InlineRow(markup.URL("⬇️ Download", link))).
+		Text(ctx, text)
 	return err
 }

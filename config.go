@@ -25,6 +25,7 @@ type Config struct {
 	URL                  string
 	SessionFile          string
 	BinChannelCache      string // where the resolved access_hash gets persisted across restarts
+	ChannelURL           string // optional: shown as a button on /start
 }
 
 func mustEnv(key string) string {
@@ -107,6 +108,7 @@ func loadConfig() Config {
 		URL:                  url,
 		SessionFile:          sessionFile,
 		BinChannelCache:      envDefault("BIN_CHANNEL_CACHE_FILE", sessionFile+".binchannel.json"),
+		ChannelURL:           os.Getenv("CHANNEL_URL"),
 	}
 }
 

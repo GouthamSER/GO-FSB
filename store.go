@@ -30,6 +30,12 @@ func newFileCache() *fileCache {
 	return c
 }
 
+func (c *fileCache) count() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.data)
+}
+
 func (c *fileCache) get(msgID int) (FileInfo, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

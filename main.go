@@ -24,11 +24,12 @@ func main() {
 	})
 
 	app := &App{
-		cfg:      cfg,
-		api:      tg.NewClient(client),
-		cache:    newFileCache(),
-		resolved: make(chan struct{}),
-		dlSem:    make(chan struct{}, 12),
+		cfg:       cfg,
+		api:       tg.NewClient(client),
+		cache:     newFileCache(),
+		resolved:  make(chan struct{}),
+		dlSem:     make(chan struct{}, 12),
+		startedAt: time.Now(),
 	}
 	app.sender = message.NewSender(app.api)
 
@@ -43,6 +44,9 @@ func main() {
 		}
 		if m.Message == "/help" {
 			return app.handleHelp(ctx, e, u)
+		}
+		if m.Message == "/stats" {
+			return app.handleStats(ctx, e, u)
 		}
 		if m.Media != nil {
 			return app.handleMedia(ctx, e, u, m)
