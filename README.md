@@ -90,9 +90,28 @@ channel's access hash. See ⚠️ Known limitations for the full story.
 
 ## 🐳 Deploy
 
+[![Deploy](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/GouthamSER/GO-FSB)
+
 `Dockerfile` and `Procfile` included — ready for Koyeb, Render, Railway, or
 any Docker-based host. Multi-stage build → static binary on Alpine, with a
 health check baked in.
+
+**Heroku** uses `heroku.yml` (container stack) + `app.json`, reusing the same
+`Dockerfile` — no separate Heroku-specific build path to maintain.
+
+```bash
+heroku create your-app-name --stack container
+heroku config:set API_ID=... API_HASH=... BOT_TOKEN=... BIN_CHANNEL=... \
+  FQDN=your-app-name.herokuapp.com HAS_SSL=true NO_PORT=true
+git push heroku main
+```
+
+Or click the button above — it walks through the same env vars via `app.json`.
+
+⚠️ Heroku dynos cycle/restart regularly and have an ephemeral filesystem, so
+the same advice from "Bin-channel discovery is passive" above applies here
+too: **set `BIN_CHANNEL_ACCESS_HASH`** after the first successful resolution
+so every dyno restart doesn't need the re-add-admin dance again.
 
 ---
 
