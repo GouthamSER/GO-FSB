@@ -138,8 +138,8 @@ func loadConfig() Config {
 		FsubChannelURL:        os.Getenv("FSUB_CHANNEL_URL"),
 		FsubChannelCache:      envDefault("FSUB_CHANNEL_CACHE_FILE", sessionFile+".fsubchannel.json"),
 
-		PerStreamParallel: envInt("PER_STREAM_PARALLEL", 24),
-		MaxConcurrentDL:   envInt("MAX_CONCURRENT_DOWNLOADS", 32),
+		PerStreamParallel: envInt("PER_STREAM_PARALLEL", 4),
+		MaxConcurrentDL:   envInt("MAX_CONCURRENT_DOWNLOADS", 8),
 	}
 }
 
