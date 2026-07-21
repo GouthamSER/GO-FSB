@@ -288,17 +288,13 @@ func (a *App) downloadRange(ctx context.Context, loc tg.InputFileLocationClass, 
 // seeking/buffering — trips FLOOD_WAIT almost immediately, and (b)
 // transparent retry-with-backoff when FLOOD_WAIT does happen anyway.
 func (a *App) getFileChunk(ctx context.Context, loc tg.InputFileLocationClass, offset int64) ([]byte, error) {
-	a.dlSem <- struct{}{}
-	defer func() { <-a.dlSem }()
-
-	for attempt := 0; attempt < 5; attempt++ {
-		r, err := a.api.UploadGetFile(ctx, &tg.UploadGetFileRequest{
-			Location: loc,
-			Offset:   offset,
-			Limit:    chunkSize,
-			Precise:  true,
-		})
+	for attempt := 0; attempt < 30; attempt++ {
+		r, err := a.doUploadGetFile(ctx, loc, offset)
 		if err != nil {
+			// tgerr.FloodWait sleeps for the required duration itself if
+			// this was a FLOOD_WAIT — deliberately done *outside* dlSem so
+			// a chunk sleeping off a flood wait doesn't hold a concurrency
+			// slot other chunks/streams could be using in the meantime.
 			if waited, werr := tgerr.FloodWait(ctx, err); waited {
 				continue
 			} else if werr != nil && werr != err {
@@ -312,7 +308,21 @@ func (a *App) getFileChunk(ctx context.Context, loc tg.InputFileLocationClass, o
 		}
 		return f.Bytes, nil
 	}
-	return nil, fmt.Errorf("gave up after repeated FLOOD_WAIT at offset %d", offset)
+	return nil, fmt.Errorf("gave up after repeated FLOOD_WAIT at offset %d (too many retries)", offset)
+}
+
+// doUploadGetFile is the only place that actually holds a.dlSem — kept
+// separate so the semaphore is released the instant the RPC call returns,
+// not held across any subsequent flood-wait sleep.
+func (a *App) doUploadGetFile(ctx context.Context, loc tg.InputFileLocationClass, offset int64) (tg.UploadFileClass, error) {
+	a.dlSem <- struct{}{}
+	defer func() { <-a.dlSem }()
+	return a.api.UploadGetFile(ctx, &tg.UploadGetFileRequest{
+		Location: loc,
+		Offset:   offset,
+		Limit:    chunkSize,
+		Precise:  true,
+	})
 }
 
 var pathRe = regexp.MustCompile(`^(\d+)(?:/(.*))?$`)
