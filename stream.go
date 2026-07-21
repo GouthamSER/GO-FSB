@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"mime"
 	"net/http"
@@ -28,20 +29,29 @@ const chunkSize = 1024 * 1024 // 1 MiB, same as python
 // object including AccessHash. captureEntities watches for that on every
 // single update and latches it in once, see main.go wiring.
 func (a *App) captureEntities(e tg.Entities, rawID int64) {
-	if a.binChannel != nil {
-		return
+	if a.binChannel == nil {
+		if ch, ok := e.Channels[rawID]; ok {
+			a.setBinChannel(ch.ID, ch.AccessHash)
+			savePeerCache(a.cfg.BinChannelCache, peerCache{ChannelID: ch.ID, AccessHash: ch.AccessHash})
+			log.Printf(
+				"resolved BIN_CHANNEL (id %d) from a live update — set "+
+					"BIN_CHANNEL_ACCESS_HASH=%d as an env var to skip discovery on "+
+					"future deploys (useful on platforms with ephemeral disks)",
+				ch.ID, ch.AccessHash)
+		}
 	}
-	ch, ok := e.Channels[rawID]
-	if !ok {
-		return
+	if a.cfg.FsubChannel != 0 && a.fsubChannel == nil {
+		fsubRawID := rawChannelID(a.cfg.FsubChannel)
+		if ch, ok := e.Channels[fsubRawID]; ok {
+			a.setFsubChannel(ch.ID, ch.AccessHash)
+			savePeerCache(a.cfg.FsubChannelCache, peerCache{ChannelID: ch.ID, AccessHash: ch.AccessHash})
+			log.Printf(
+				"resolved FSUB_CHANNEL (id %d) from a live update — set "+
+					"FSUB_CHANNEL_ACCESS_HASH=%d as an env var to skip discovery on "+
+					"future deploys",
+				ch.ID, ch.AccessHash)
+		}
 	}
-	a.setBinChannel(ch.ID, ch.AccessHash)
-	savePeerCache(a.cfg.BinChannelCache, peerCache{ChannelID: ch.ID, AccessHash: ch.AccessHash})
-	log.Printf(
-		"resolved BIN_CHANNEL (id %d) from a live update — set "+
-			"BIN_CHANNEL_ACCESS_HASH=%d as an env var to skip discovery on "+
-			"future deploys (useful on platforms with ephemeral disks)",
-		ch.ID, ch.AccessHash)
 }
 
 // setBinChannel is the single place that actually latches a resolved
@@ -58,8 +68,43 @@ func (a *App) setBinChannel(channelID, accessHash int64) {
 	}
 }
 
+// setFsubChannel is the FSUB_CHANNEL equivalent of setBinChannel.
+func (a *App) setFsubChannel(channelID, accessHash int64) {
+	a.fsubChannel = &tg.InputChannel{ChannelID: channelID, AccessHash: accessHash}
+	select {
+	case <-a.fsubResolved:
+	default:
+		close(a.fsubResolved)
+	}
+}
+
 func (a *App) isResolved() bool {
 	return a.binChannel != nil
+}
+
+// fsubEnabled reports whether FSUB_CHANNEL was configured at all.
+func (a *App) fsubEnabled() bool {
+	return a.cfg.FsubChannel != 0
+}
+
+func (a *App) isFsubResolved() bool {
+	return a.fsubChannel != nil
+}
+
+// isMember checks whether userPeer belongs to FSUB_CHANNEL. Only call this
+// once fsubEnabled() && isFsubResolved() are both true.
+func (a *App) isMember(ctx context.Context, userPeer tg.InputPeerClass) (bool, error) {
+	_, err := a.api.ChannelsGetParticipant(ctx, &tg.ChannelsGetParticipantRequest{
+		Channel:     a.fsubChannel,
+		Participant: userPeer,
+	})
+	if err != nil {
+		if tgerr.Is(err, "USER_NOT_PARTICIPANT") {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // fetchFileInfo refreshes/loads a bin-channel message's file location via
@@ -123,19 +168,14 @@ var errFileNotFound = fmt.Errorf("file not found")
 // cross-DC media session juggling (what custom_dl.py's generate_media_session
 // does) was dropped for this "core only" port. Works fine when bot + bin
 // channel share a DC, which is the common case.
-// perStreamParallel is how many chunks a single HTTP stream tries to keep
-// in flight at once. The global a.dlSem cap is what actually protects
-// against FLOOD_WAIT, so this can safely be higher — it's just "how eager is
-// one request", not the real limiter.
-const perStreamParallel = 8
-
 // downloadRange used to fetch one 1 MiB chunk, wait for the full RPC
 // round-trip, write it, then fetch the next — completely serial, so total
 // throughput was capped at 1 chunk/RTT no matter how fast the pipe was.
 // This version prefetches up to perStreamParallel chunks concurrently and
 // writes them out strictly in order, so the RTT of chunk N+1 overlaps with
 // writing chunk N instead of stacking on top of it.
-func (a *App) downloadRange(ctx context.Context, loc tg.InputFileLocationClass, from, until int64, w http.ResponseWriter) error {
+func (a *App) downloadRange(ctx context.Context, loc tg.InputFileLocationClass, from, until int64, w io.Writer) error {
+	parallel := a.cfg.PerStreamParallel
 	offset := from - (from % chunkSize)
 	firstCut := from - offset
 	lastCut := until%chunkSize + 1
@@ -155,10 +195,10 @@ func (a *App) downloadRange(ctx context.Context, loc tg.InputFileLocationClass, 
 	}
 
 	jobs := make(chan job)
-	results := make(chan res, perStreamParallel)
+	results := make(chan res, parallel)
 
 	var wg sync.WaitGroup
-	workers := perStreamParallel
+	workers := parallel
 	if total < workers {
 		workers = total
 	}
@@ -194,7 +234,7 @@ func (a *App) downloadRange(ctx context.Context, loc tg.InputFileLocationClass, 
 		close(results)
 	}()
 
-	pending := make(map[int][]byte, perStreamParallel)
+	pending := make(map[int][]byte, parallel)
 	next := 0
 	var firstErr error
 	stop := false
@@ -352,9 +392,30 @@ func (a *App) streamHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodHead {
 		return
 	}
-	if err := a.downloadRange(ctx, fi.Location, from, until, w); err != nil {
-		log.Printf("stream error for message %d: %v", msgID, err)
+	cw := &countingWriter{w: w}
+	start := time.Now()
+	err = a.downloadRange(ctx, fi.Location, from, until, cw)
+	elapsed := time.Since(start)
+	mbps := float64(cw.n) * 8 / 1e6 / elapsed.Seconds()
+	if err != nil {
+		log.Printf("stream error for message %d after %s (%.1f MB, %.1f Mbps): %v",
+			msgID, elapsed.Round(time.Millisecond), float64(cw.n)/1e6, mbps, err)
+	} else {
+		log.Printf("stream done for message %d: %.1f MB in %s (%.1f Mbps)",
+			msgID, float64(cw.n)/1e6, elapsed.Round(time.Millisecond), mbps)
 	}
+}
+
+// countingWriter tracks total bytes written, purely for throughput logging.
+type countingWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
 }
 
 func parseRange(header string, size int64) (from, until int64) {

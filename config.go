@@ -26,6 +26,14 @@ type Config struct {
 	SessionFile          string
 	BinChannelCache      string // where the resolved access_hash gets persisted across restarts
 	ChannelURL           string // optional: shown as a button on /start
+
+	FsubChannel           int64  // 0 = fsub disabled
+	FsubChannelAccessHash int64  // optional: skip discovery entirely if set
+	FsubChannelURL        string // shown as the "join" button when gating
+	FsubChannelCache      string // persisted access_hash cache, same format as BinChannelCache
+
+	PerStreamParallel int // how many chunks one HTTP stream prefetches at once
+	MaxConcurrentDL   int // global cap on in-flight upload.getFile calls
 }
 
 func mustEnv(key string) string {
@@ -93,6 +101,21 @@ func loadConfig() Config {
 			os.Exit(1)
 		}
 	}
+	var fsubChannel, fsubAccessHash int64
+	if v := os.Getenv("FSUB_CHANNEL"); v != "" {
+		fsubChannel, err = strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "FSUB_CHANNEL must be an int (e.g. -1001234567890)")
+			os.Exit(1)
+		}
+	}
+	if v := os.Getenv("FSUB_CHANNEL_ACCESS_HASH"); v != "" {
+		fsubAccessHash, err = strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "FSUB_CHANNEL_ACCESS_HASH must be an int")
+			os.Exit(1)
+		}
+	}
 	return Config{
 		APIID:                apiID,
 		APIHash:              mustEnv("API_HASH"),
@@ -109,7 +132,27 @@ func loadConfig() Config {
 		SessionFile:          sessionFile,
 		BinChannelCache:      envDefault("BIN_CHANNEL_CACHE_FILE", sessionFile+".binchannel.json"),
 		ChannelURL:           os.Getenv("CHANNEL_URL"),
+
+		FsubChannel:           fsubChannel,
+		FsubChannelAccessHash: fsubAccessHash,
+		FsubChannelURL:        os.Getenv("FSUB_CHANNEL_URL"),
+		FsubChannelCache:      envDefault("FSUB_CHANNEL_CACHE_FILE", sessionFile+".fsubchannel.json"),
+
+		PerStreamParallel: envInt("PER_STREAM_PARALLEL", 24),
+		MaxConcurrentDL:   envInt("MAX_CONCURRENT_DOWNLOADS", 32),
 	}
+}
+
+func envInt(key string, def int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
 }
 
 // rawChannelID converts a bot-API style channel id (-100xxxxxxxxxx) to the

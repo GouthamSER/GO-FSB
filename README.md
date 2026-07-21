@@ -17,6 +17,7 @@ Built on [`gotd/td`](https://github.com/gotd/td) (raw MTProto in Go, no CGo).
 - 📥 Every upload also posts a note in `BIN_CHANNEL` — sender name, username, user ID, file name — so admins can see who sent what
 - 📊 `/stats` reports live CPU / RAM / storage / uptime (reads `/proc` + `statfs` directly, Linux only — fine for the Docker deploy, won't build on macOS/Windows)
 - 📢 Optional channel button on `/start` if `CHANNEL_URL` is set
+- 🔒 Optional force-subscribe gate — set `FSUB_CHANNEL` and both `/start` and file uploads check membership first, with a "Join Channel" button if not subscribed
 
 ## 🧩 Scope
 
@@ -24,10 +25,10 @@ This is a **"core only"** port — a deliberate scope cut, not an oversight.
 
 | Ported ✅ | Dropped ❌ |
 |---|---|
-| bot `/start` `/help` | MULTI_TOKEN multi-client pool |
-| media → link generation | FSUB gate |
-| HTTP range streaming | MongoDB user-db |
-| | `/stats`, `/broadcast` |
+| bot `/start` `/help` `/stats` | MULTI_TOKEN multi-client pool |
+| media → link generation | MongoDB user-db |
+| HTTP range streaming | `/stats`'s user-count / `/broadcast` (no user-db) |
+| force-sub gate | |
 
 ---
 
@@ -41,11 +42,13 @@ This is a **"core only"** port — a deliberate scope cut, not an oversight.
   - 💾 Once learned, it's cached to disk next to the session file — same-disk restarts skip discovery.
   - ☁️ On ephemeral-disk platforms (Koyeb etc.) that cache doesn't survive a redeploy — instead, copy the `BIN_CHANNEL_ACCESS_HASH=...` value the logs print after first resolution into an env var, and every future deploy resolves instantly.
   - `/start` and `/help` work immediately either way — only file-link generation waits on this.
+  - **`FSUB_CHANNEL` uses this exact same bootstrap** (own cache file, own `FSUB_CHANNEL_ACCESS_HASH` override) — if set, do the re-add-admin step for that channel too. Until it resolves, the fsub gate fails **closed** (blocks with a "try again" message) rather than open.
 - **👤 Single bot client only** — no multi-token load balancing.
 - **🌍 Same-DC only** — `upload.getFile` is called against whatever DC the session is on; if the file lives on a different DC (`FILE_MIGRATE_X`), streaming fails. Cross-DC media sessions weren't ported.
 - **📡 No CDN redirect support** — `upload.fileCdnRedirect` responses aren't followed.
-- **🚦 Flood protection built in** — concurrent chunk requests are capped at 12 in-flight app-wide, with automatic retry+backoff on `FLOOD_WAIT` (video players fire lots of overlapping Range requests while seeking, which trips Telegram's rate limit fast without this).
-- **⚡ Pipelined downloads** — each stream prefetches up to 8 chunks ahead instead of waiting for one RPC round-trip before starting the next, so throughput isn't capped at 1 chunk/RTT anymore. Bytes are still written to the client strictly in order.
+- **🚦 Flood protection built in** — concurrent chunk requests are capped app-wide (`MAX_CONCURRENT_DOWNLOADS`, default 32), with automatic retry+backoff on `FLOOD_WAIT` (video players fire lots of overlapping Range requests while seeking, which trips Telegram's rate limit fast without this).
+- **⚡ Pipelined downloads** — each stream prefetches up to `PER_STREAM_PARALLEL` chunks ahead (default 24) instead of waiting for one RPC round-trip before starting the next. Bytes are still written to the client strictly in order. Both knobs are env-configurable if your host/DC combo can push more (or needs less to avoid `FLOOD_WAIT`).
+- **📈 Throughput is logged per stream** (`stream done for message N: X MB in Yms (Z Mbps)`) — useful for actually diagnosing slow downloads instead of guessing. If speed is still lower than expected after tuning the two knobs above, the remaining bottleneck is most likely single-TCP-connection overhead to Telegram's DC (this Go port, like gotd's own downloader, multiplexes all chunk requests over one connection rather than opening several physical connections the way some Python setups effectively do) or the host's own network path — neither of which more app-level concurrency will fix.
 - **⏱️ No artificial stream timeout** — only the initial metadata lookup gets a 30s timeout; the actual byte streaming uses the request's own context (cancels on client disconnect only). An earlier version accidentally reused that 30s timeout for the whole download, silently killing any file that took longer than 30s to finish and causing an endless client-retry/FLOOD_WAIT storm — fixed.
 - **✍️ Plain text replies only** — no HTML formatting or inline buttons, kept simple on purpose.
 
@@ -76,6 +79,11 @@ NO_PORT=true
 SESSION_FILE=gofilestream.session.json
 # BIN_CHANNEL_ACCESS_HASH=...   # optional — skips discovery, see Known limitations
 # CHANNEL_URL=https://t.me/yourchannel   # optional — shows a button on /start
+# FSUB_CHANNEL=-1009876543210   # optional — force-subscribe gate
+# FSUB_CHANNEL_ACCESS_HASH=...   # optional — skips fsub discovery, see Known limitations
+# FSUB_CHANNEL_URL=https://t.me/yourchannel   # shown as the "Join Channel" button
+# PER_STREAM_PARALLEL=24        # chunks one stream prefetches at once
+# MAX_CONCURRENT_DOWNLOADS=32   # global cap across all streams
 ```
 
 ```bash

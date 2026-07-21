@@ -52,6 +52,18 @@
       "description": "Optional — where the Telegram session is stored",
       "value": "gofilestream.session.json",
       "required": false
+    },
+    "FSUB_CHANNEL": {
+      "description": "Optional — force-subscribe channel id, e.g. -1009876543210",
+      "required": false
+    },
+    "FSUB_CHANNEL_ACCESS_HASH": {
+      "description": "Optional — skips fsub channel discovery, same idea as BIN_CHANNEL_ACCESS_HASH",
+      "required": false
+    },
+    "FSUB_CHANNEL_URL": {
+      "description": "Optional — shown as the Join Channel button when gating",
+      "required": false
     }
   }
 }

@@ -24,12 +24,13 @@ func main() {
 	})
 
 	app := &App{
-		cfg:       cfg,
-		api:       tg.NewClient(client),
-		cache:     newFileCache(),
-		resolved:  make(chan struct{}),
-		dlSem:     make(chan struct{}, 12),
-		startedAt: time.Now(),
+		cfg:          cfg,
+		api:          tg.NewClient(client),
+		cache:        newFileCache(),
+		resolved:     make(chan struct{}),
+		fsubResolved: make(chan struct{}),
+		dlSem:        make(chan struct{}, cfg.MaxConcurrentDL),
+		startedAt:    time.Now(),
 	}
 	app.sender = message.NewSender(app.api)
 
@@ -40,7 +41,7 @@ func main() {
 			return nil
 		}
 		if m.Message == "/start" {
-			return app.handleStart(ctx, e, u)
+			return app.handleStart(ctx, e, u, m)
 		}
 		if m.Message == "/help" {
 			return app.handleHelp(ctx, e, u)
@@ -96,6 +97,17 @@ func main() {
 			log.Printf("BIN_CHANNEL resolved from cache file %s", cfg.BinChannelCache)
 		}
 
+		fsubRawID := rawChannelID(cfg.FsubChannel)
+		if cfg.FsubChannel == 0 {
+			close(app.fsubResolved) // fsub disabled, nothing to wait on
+		} else if cfg.FsubChannelAccessHash != 0 {
+			app.setFsubChannel(fsubRawID, cfg.FsubChannelAccessHash)
+			log.Printf("FSUB_CHANNEL resolved from FSUB_CHANNEL_ACCESS_HASH env var")
+		} else if pc, ok := loadPeerCache(cfg.FsubChannelCache); ok && pc.ChannelID == fsubRawID {
+			app.setFsubChannel(fsubRawID, pc.AccessHash)
+			log.Printf("FSUB_CHANNEL resolved from cache file %s", cfg.FsubChannelCache)
+		}
+
 		// Start the HTTP server right away so health checks pass even
 		// before BIN_CHANNEL is resolved — /start and /help work
 		// immediately, only actual file forwarding waits on it.
@@ -120,6 +132,24 @@ func main() {
 			<-app.resolved
 			log.Printf("BIN_CHANNEL resolved, file links will work now")
 		}()
+
+		if cfg.FsubChannel != 0 {
+			go func() {
+				select {
+				case <-app.fsubResolved:
+					return
+				case <-time.After(10 * time.Second):
+				}
+				log.Printf(
+					"FSUB_CHANNEL (id %d) not resolved yet — open it and "+
+						"re-add/promote this bot as admin (or post any message "+
+						"there) to trigger it. The fsub gate blocks uploads with "+
+						"a 'try again' message until this resolves.",
+					fsubRawID)
+				<-app.fsubResolved
+				log.Printf("FSUB_CHANNEL resolved, the gate is enforced now")
+			}()
+		}
 
 		<-ctx.Done()
 		return ctx.Err()

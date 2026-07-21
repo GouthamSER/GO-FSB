@@ -24,6 +24,9 @@ type App struct {
 	resolved   chan struct{} // closed once binChannel is resolved
 	dlSem      chan struct{} // caps concurrent upload.getFile calls
 	startedAt  time.Time
+
+	fsubChannel  *tg.InputChannel
+	fsubResolved chan struct{} // closed once fsubChannel is resolved (no-op channel if fsub disabled)
 }
 
 func mediaOf(m *tg.Message) (name string, mime string, size int64, mediaID int64, ok bool) {
@@ -151,7 +154,44 @@ func (a *App) buildStreamLink(msgID int, name string, mediaID int64) string {
 	return fmt.Sprintf("%s%d/%s?hash=%s", a.cfg.URL, msgID, url.PathEscape(name), hash)
 }
 
-func (a *App) handleStart(ctx context.Context, e tg.Entities, u message.AnswerableMessageUpdate) error {
+// requireSub returns true if the request should proceed. If FSUB_CHANNEL is
+// configured, not yet resolved, or the sender isn't a member, it replies
+// with an appropriate message/button itself and returns false.
+func (a *App) requireSub(ctx context.Context, e tg.Entities, u message.AnswerableMessageUpdate, m *tg.Message) bool {
+	if !a.fsubEnabled() {
+		return true
+	}
+	if !a.isFsubResolved() {
+		a.sender.Reply(e, u).Text(ctx, //nolint:errcheck
+			"⏳ Force-sub channel isn't linked yet, try again in a bit.")
+		return false
+	}
+	userPeer, ok := fromPeerOf(e, m)
+	if !ok {
+		return true // can't check, don't block on our own resolution failure
+	}
+	member, err := a.isMember(ctx, userPeer)
+	if err != nil {
+		log.Printf("fsub check failed: %v", err)
+		return true // fail open rather than lock everyone out on a transient API error
+	}
+	if member {
+		return true
+	}
+
+	text := "🔒 You need to join our channel before using this bot."
+	b := a.sender.Reply(e, u)
+	if a.cfg.FsubChannelURL != "" {
+		b = b.Markup(markup.InlineRow(markup.URL("📢 Join Channel", a.cfg.FsubChannelURL)))
+	}
+	b.Text(ctx, text) //nolint:errcheck
+	return false
+}
+
+func (a *App) handleStart(ctx context.Context, e tg.Entities, u message.AnswerableMessageUpdate, m *tg.Message) error {
+	if !a.requireSub(ctx, e, u, m) {
+		return nil
+	}
 	text := "👋 Hey, welcome!\n\n" +
 		"I'm F2L bot ⚡ powered by Go — send me any file (document, video, " +
 		"audio, photo) and I'll hand you back a direct download/streaming " +
@@ -193,6 +233,9 @@ func (a *App) handleMedia(ctx context.Context, e tg.Entities, u message.Answerab
 		_, err := a.sender.Reply(e, u).Text(ctx,
 			"⏳ Still linking to storage channel, try again in a few seconds.")
 		return err
+	}
+	if !a.requireSub(ctx, e, u, m) {
+		return nil
 	}
 	name, mime, size, mediaID, ok := mediaOf(m)
 	if !ok {
